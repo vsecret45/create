@@ -10,7 +10,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-
     env:
       AI_API_URL: ${{ secrets.AI_API_URL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
@@ -23,31 +22,33 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Build prompt from diff
+      - name: Build prompt
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
-          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch
+          git fetch origin ${{ github.base_ref }} --depth=1 || true
+          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch || true
           cat diff.patch > prompt.txt
 
       - name: Call OpenAI
         id: ask
         run: |
           body=$(jq -n --rawfile p prompt.txt \
-            '{model: env.AI_MODEL, messages: [
-              {role:"system","content":"Tu es un relecteur de code strict."},
-              {role:"user","content":$p}
-            ]}')
-          
-          resp=$(curl -s -X POST $AI_API_URL \
+          '{model:env.AI_MODEL, messages: [
+            {role:"system", content:"Tu es un relecteur de code strict."},
+            {role:"user", content:$p}
+          ]}')
+
+          resp=$(curl -sS -X POST "$AI_API_URL" \
             -H "Authorization: Bearer $AI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$body")
-          
-          echo "$resp" | jq -r '.choices[0].message.content' > output.txt
+
+          echo "resp=$resp" >> $GITHUB_OUTPUT
 
       - name: Extract text
         id: text
-        run: echo "txt<<EOF" >> $GITHUB_OUTPUT && cat output.txt >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
+        run: |
+          echo "txt=$(echo '${{ steps.ask.outputs.resp }}' \
+          | jq -r '.choices[0].message.content')" >> $GITHUB_OUTPUT
 
       - name: Write to job summary (si pas de PR)
         if: ${{ github.event_name != 'pull_request' }}
@@ -64,3 +65,4 @@ jobs:
               issue_number: context.issue.number,
               body: "### Relecture IA\n\n${{ steps.text.outputs.txt }}"
             })
+          
