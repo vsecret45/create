@@ -1,0 +1,57 @@
+name: AI Code Review
+on:
+  workflow_dispatch:
+  pull_request:
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      AI_API_URL: ${{ secrets.AI_API_URL }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_MODEL:   ${{ secrets.AI_MODEL }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build prompt from diff
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1 || true
+          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch || true
+          cat diff.patch > prompt.txt || true
+          echo " " >> prompt.txt
+
+      - name: Call model API
+        id: ask
+        run: |
+          body=$(jq -n --rawfile p prompt.txt \
+            '{model:env.AI_MODEL,
+              messages:[
+                {role:"system",content:"Tu es un relecteur de code strict. Réponse courte et actionnable."},
+                {role:"user",content:$p}
+              ]}')
+          resp=$(curl -sS -X POST "$AI_API_URL" \
+            -H "Authorization: Bearer $AI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+          echo "resp<<EOF" >> $GITHUB_OUTPUT
+          echo "$resp"     >> $GITHUB_OUTPUT
+          echo "EOF"       >> $GITHUB_OUTPUT
+
+      - name: Extract text
+        id: text
+        run: |
+          echo "txt=$(echo '${{ steps.ask.outputs.resp }}' | jq -r '.choices[0].message.content')" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: "### Relecture IA\n\n${{ steps.text.outputs.txt }}"
+            })
