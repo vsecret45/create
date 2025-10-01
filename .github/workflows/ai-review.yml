@@ -1,15 +1,12 @@
 name: AI Code Review
 
 on:
-  workflow_dispatch:    # lancement manuel
-  pull_request:         # (optionnel) commente automatiquement sur une PR
+  workflow_dispatch:   # lancement manuel
+  pull_request:        # commente automatiquement sur une PR
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    # ⚠️ nécessaire si tes secrets sont stockés dans l'environnement "AI"
-    environment: AI
-
     permissions:
       contents: read
       pull-requests: write
@@ -17,7 +14,7 @@ jobs:
     env:
       AI_API_URL: ${{ secrets.AI_API_URL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      AI_MODEL:   ${{ secrets.AI_MODEL }}
+      AI_MODEL: ${{ secrets.AI_MODEL }}
 
     steps:
       - name: Checkout code
@@ -32,65 +29,37 @@ jobs:
         id: diff
         shell: bash
         run: |
-          # Récupère le diff propre entre la base et la tête
           git fetch origin ${{ github.base_ref }} --depth=1 || true
-          git diff --unified=0 origin/${{ github.base_ref }}... > diff.patch || true
-          # Si pas de diff, mets un message court
+          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch || true
+          
           if [ ! -s diff.patch ]; then
             echo "Aucun changement détecté." > prompt.txt
           else
-            cat > prompt.txt <<'TXT'
-Tu es un relecteur de code strict. Relis le diff suivant et propose des remarques concrètes (bugs potentiels, sécurité, lisibilité, complexité, tests manquants). Réponds en FR.
+            cat <<'TXT' > prompt.txt
+Tu es un relecteur de code strict. Relis le diff suivant et propose des remarques concrètes.
 TXT
-            echo "" >> prompt.txt
             cat diff.patch >> prompt.txt
           fi
 
       - name: Call OpenAI
         id: ask
-        shell: bash
         run: |
-          # Lit le prompt et l’encode en JSON sûr
-          PROMPT_JSON=$(jq -Rs . < prompt.txt)
-
-          # Construit le JSON de requête de manière fiable avec jq
-          BODY=$(jq -n \
-            --arg model   "$AI_MODEL" \
-            --arg sys     "Tu es un relecteur de code strict." \
-            --arg user    "$PROMPT_JSON" \
-            '{
-              model: $model,
-              messages: [
-                {role:"system", content:$sys},
-                {role:"user",   content:($user | fromjson)}
-              ]
-            }')
-
-          curl -sS "$AI_API_URL" \
+          body=$(jq -n --rawfile p prompt.txt \
+            '{model: env.AI_MODEL, messages:[{role:"system",content:"Tu es un relecteur de code strict."}, {role:"user",content:$p}]}')
+          
+          resp=$(curl -sS -X POST "$AI_API_URL" \
             -H "Authorization: Bearer $AI_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$BODY" > resp.json
+            -d "$body")
 
-          # Écrit la réponse brute dans les logs pour debug
-          echo "RESP_START"
-          cat resp.json
-          echo "RESP_END"
+          echo "resp<<EOF" >> $GITHUB_OUTPUT
+          echo "$resp" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Extract text
         id: text
-        shell: bash
         run: |
-          TXT=$(jq -r '.choices[0].message.content // "Pas de réponse." ' resp.json)
-          echo "txt<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$TXT"     >> "$GITHUB_OUTPUT"
-          echo "EOF"      >> "$GITHUB_OUTPUT"
-
-      - name: Write to job summary (si pas de PR)
-        if: ${{ github.event_name != 'pull_request' }}
-        run: |
-          echo "### Relecture IA"        >> "$GITHUB_STEP_SUMMARY"
-          echo ""                        >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.text.outputs.txt }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "txt=$(echo '${{ steps.ask.outputs.resp }}' | jq -r '.choices[0].message.content')" >> $GITHUB_OUTPUT
 
       - name: Comment on PR
         if: ${{ github.event_name == 'pull_request' }}
@@ -99,8 +68,7 @@ TXT
           script: |
             github.rest.issues.createComment({
               owner: context.repo.owner,
-              repo:  context.repo.repo,
+              repo: context.repo.repo,
               issue_number: context.issue.number,
               body: "### Relecture IA\n\n${{ steps.text.outputs.txt }}"
             })
-            
