@@ -1,8 +1,8 @@
 name: AI Code Review
 
 on:
-  workflow_dispatch:   # lancement manuel
-  pull_request:        # commente automatiquement sur une PR
+  workflow_dispatch:    # lancement manuel
+  pull_request:         # commente auto sur une PR
 
 jobs:
   review:
@@ -14,7 +14,7 @@ jobs:
     env:
       AI_API_URL: ${{ secrets.AI_API_URL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      AI_MODEL: ${{ secrets.AI_MODEL }}
+      AI_MODEL:  ${{ secrets.AI_MODEL }}
 
     steps:
       - name: Checkout code
@@ -29,24 +29,33 @@ jobs:
         id: diff
         shell: bash
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1 || true
-          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch || true
-          
+          set -e
+          if [ -n "${GITHUB_BASE_REF}" ]; then
+            git fetch origin "${GITHUB_BASE_REF}" --depth=1 || true
+            git diff --unified=0 "origin/${GITHUB_BASE_REF}" > diff.patch || true
+          else
+            # Lancement manuel : comparer au commit précédent
+            git diff --unified=0 HEAD~1 > diff.patch || true
+          fi
+
           if [ ! -s diff.patch ]; then
             echo "Aucun changement détecté." > prompt.txt
           else
-            cat <<'TXT' > prompt.txt
+            {
+              echo "Tu es un relecteur de code strict. Relis le diff suivant et propose des remarques concrètes."
+              cat diff.patch
+            } > prompt.txt
+          fi
+
       - name: Call OpenAI
         id: ask
         run: |
           body=$(jq -n --rawfile p prompt.txt \
-            '{model: env.AI_MODEL, messages:[{role:"system",content:"Tu es un relecteur de code strict."}, {role:"user",content:$p}]}')
-          
+            '{model: env.AI_MODEL, messages:[{role:"system",content:"Tu es un relecteur de code strict."},{role:"user",content:$p}]}' )
           resp=$(curl -sS -X POST "$AI_API_URL" \
             -H "Authorization: Bearer $AI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$body")
-
           echo "resp<<EOF" >> $GITHUB_OUTPUT
           echo "$resp" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
