@@ -36,11 +36,6 @@ jobs:
             echo "Aucun changement détecté." > prompt.txt
           else
             cat <<'TXT' > prompt.txt
-Tu es un relecteur de code strict. Relis le diff suivant et propose des remarques concrètes.
-TXT
-            cat diff.patch >> prompt.txt
-          fi
-
       - name: Call OpenAI
         id: ask
         run: |
