@@ -2,6 +2,7 @@ name: AI Code Review
 
 on:
   workflow_dispatch:
+  pull_request:
 
 jobs:
   review:
@@ -9,44 +10,51 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+
     env:
       AI_API_URL: ${{ secrets.AI_API_URL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
       AI_MODEL: ${{ secrets.AI_MODEL }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Build prompt from diff
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1 || true
-          git diff --unified=0 origin/${{ github.base_ref }}... > diff.patch || true
-          cat diff.patch > prompt.txt || true
-          echo " " >> prompt.txt
+          git fetch origin ${{ github.base_ref }} --depth=1
+          git diff --unified=0 origin/${{ github.base_ref }} > diff.patch
+          cat diff.patch > prompt.txt
 
-      - name: Call model API
+      - name: Call OpenAI
         id: ask
         run: |
           body=$(jq -n --rawfile p prompt.txt \
-            '{model:env.AI_MODEL,
-              messages:[
-                {role:"system",content:"Tu es un relecteur de code strict."},
-                {role:"user",content:$p}
-              ]}')
-          resp=$(curl -sS -X POST "$AI_API_URL" \
+            '{model: env.AI_MODEL, messages: [
+              {role:"system","content":"Tu es un relecteur de code strict."},
+              {role:"user","content":$p}
+            ]}')
+          
+          resp=$(curl -s -X POST $AI_API_URL \
             -H "Authorization: Bearer $AI_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$body")
-          echo "resp<<EOF" >> $GITHUB_OUTPUT
-          echo "$resp"     >> $GITHUB_OUTPUT
-          echo "EOF"       >> $GITHUB_OUTPUT
+          
+          echo "$resp" | jq -r '.choices[0].message.content' > output.txt
 
       - name: Extract text
         id: text
-        run: |
-          echo "txt=$(echo '${{ steps.ask.outputs.resp }}' | jq -r '.choices[0].message.content')" >> $GITHUB_OUTPUT
+        run: echo "txt<<EOF" >> $GITHUB_OUTPUT && cat output.txt >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Comment on PR
+      - name: Write to job summary (si pas de PR)
+        if: ${{ github.event_name != 'pull_request' }}
+        run: echo "### Relecture IA\n\n${{ steps.text.outputs.txt }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR (si PR)
+        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/github-script@v7
         with:
           script: |
