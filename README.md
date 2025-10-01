@@ -1,20 +1,3 @@
-name: AI Code Review
-on:
-  workflow_dispatch:
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      AI_MODEL: ${{ secrets.AI_MODEL }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Install jq
         run: sudo apt-get update -y && sudo apt-get install -y jq
 
