@@ -1,38 +1,12 @@
-name: AI Code Review
-
-on:
-  workflow_dispatch:   # permet de lancer le workflow à la main
-  pull_request:        # ou automatiquement à chaque pull request
-    types: [opened, synchronize, reopened]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      AI_API_URL: ${{ secrets.AI_API_URL }}
-      AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      AI_MODEL:   ${{ secrets.AI_MODEL }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build prompt from diff
-        run: |
-          git fetch origin ${{ github.base_ref }} --depth=1 || true
-          git diff --unified=0 origin/${{ github.base_ref }}... > diff.patch || true
-          printf 'Fais un review précis et actionnable du patch suivant:\n```diff\n' > prompt.txt
-          cat diff.patch >> prompt.txt || true
-          echo '```' >> prompt.txt
-
       - name: Call model API
         id: ask
         run: |
-          body=$(jq -Rs --slurpfile p prompt.txt \
+          body=$(jq -n --rawfile p prompt.txt \
             '{model:env.AI_MODEL,
-              messages:[{role:"system",content:"Tu es un relecteur de code strict."},
-                        {role:"user",content:$p[0]}]}' < /dev/null)
+              messages:[
+                {role:"system",content:"Tu es un relecteur de code strict."},
+                {role:"user",content:$p}
+              ]}')
           resp=$(curl -sS -X POST "$AI_API_URL" \
             -H "Authorization: Bearer $AI_API_KEY" \
             -H "Content-Type: application/json" \
@@ -40,25 +14,3 @@ jobs:
           echo "resp<<EOF" >> $GITHUB_OUTPUT
           echo "$resp"     >> $GITHUB_OUTPUT
           echo "EOF"       >> $GITHUB_OUTPUT
-
-      - name: Extract text
-        id: text
-        run: |
-          txt=$(echo '${{ steps.ask.outputs.resp }}' | jq -r '..|.content? // empty' | head -n1)
-          echo "txt<<EOF" >> $GITHUB_OUTPUT
-          echo "$txt"     >> $GITHUB_OUTPUT
-          echo "EOF"      >> $GITHUB_OUTPUT
-
-      - name: Comment on PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const body = `### Relecture IA\n\n${process.env.TEXT}\n`;
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
-        env:
-          TEXT: ${{ steps.text.outputs.txt }}
